@@ -3,7 +3,7 @@ name = "kalcite-lsp"
 version = "0.14.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Language Server Protocol implementation for the Kalcite language"
 repository = "https://github.com/Kalcite-Engine/kalcite-lsp"
 
