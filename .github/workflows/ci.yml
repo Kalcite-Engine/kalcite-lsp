@@ -1,0 +1,21 @@
+name: LSP CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test
+      - run: cargo clippy --all-targets
