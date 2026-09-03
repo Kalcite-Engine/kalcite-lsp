@@ -19,6 +19,10 @@ be launched by an editor or client extension rather than used interactively.
 
 Rust 1.88 or newer is required.
 
+For the recommended developer-toolchain setup, install
+[Kallyup](https://github.com/Kalcite-Engine/kallyup) and run `kallyup install developer`.
+Manual installation remains available:
+
 ```bash
 cargo install --path .
 kalcite-lsp
