@@ -1,8 +1,9 @@
 # Kalcite LSP
 
 `kalcite-lsp` is the Language Server Protocol implementation for Kalcite. It
-provides editor-facing diagnostics, completion, hover information, definitions,
-and document symbols for `.klc` source files and Kalcite project resources.
+provides editor-facing diagnostics, completion, hover information, navigation,
+rename support, and semantic highlighting for `.klc` source files and Kalcite
+project resources.
 
 ## Capabilities
 
@@ -10,7 +11,9 @@ and document symbols for `.klc` source files and Kalcite project resources.
 - scene and resource diagnostics for `.kscn`, input maps, assets, and saves;
 - completion for language and engine symbols;
 - hover documentation for known engine APIs;
-- go-to-definition and document symbols.
+- go-to-definition, references, rename, document symbols, and workspace symbols;
+- lexer-backed semantic tokens for keywords, types, functions, variables,
+  numbers, and strings, with UTF-16 LSP positions for non-ASCII documents.
 
 The server communicates over standard input/output using LSP. It is intended to
 be launched by an editor or client extension rather than used interactively.

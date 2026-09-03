@@ -53,6 +53,13 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
     ("Draw.glow", "void — draw an energy-attenuated radial light"),
 ];
 
+const SEMANTIC_KEYWORD: u32 = 0;
+const SEMANTIC_TYPE: u32 = 1;
+const SEMANTIC_FUNCTION: u32 = 2;
+const SEMANTIC_VARIABLE: u32 = 3;
+const SEMANTIC_NUMBER: u32 = 4;
+const SEMANTIC_STRING: u32 = 5;
+
 struct Backend {
     client: Client,
     root: RwLock<Option<PathBuf>>,
@@ -83,6 +90,25 @@ impl LanguageServer for Backend {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 })),
+                semantic_tokens_provider: Some(
+                    SemanticTokensOptions {
+                        legend: SemanticTokensLegend {
+                            token_types: vec![
+                                SemanticTokenType::KEYWORD,
+                                SemanticTokenType::TYPE,
+                                SemanticTokenType::FUNCTION,
+                                SemanticTokenType::VARIABLE,
+                                SemanticTokenType::NUMBER,
+                                SemanticTokenType::STRING,
+                            ],
+                            token_modifiers: Vec::new(),
+                        },
+                        range: None,
+                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -204,6 +230,19 @@ impl LanguageServer for Backend {
             &text,
             &params.text_document.uri,
         ))))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let Some(text) = self.document_text(&params.text_document.uri).await else {
+            return Ok(None);
+        };
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic_tokens(&text),
+        })))
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
@@ -933,11 +972,133 @@ fn position_offset(text: &str, position: Position) -> usize {
     let mut offset = 0usize;
     for (line, part) in text.split_inclusive('\n').enumerate() {
         if line == position.line as usize {
-            return offset + (position.character as usize).min(part.trim_end_matches('\n').len());
+            let content = part.trim_end_matches('\n');
+            let mut utf16 = 0u32;
+            for (index, character) in content.char_indices() {
+                let width = character.len_utf16() as u32;
+                if utf16 + width > position.character {
+                    return offset + index;
+                }
+                utf16 += width;
+            }
+            return offset + content.len();
         }
         offset += part.len();
     }
     text.len()
+}
+
+fn semantic_tokens(text: &str) -> Vec<SemanticToken> {
+    let Ok(tokens) = kalcite_syntax::lex(text) else {
+        return Vec::new();
+    };
+    let mut absolute = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(token_type) = semantic_token_type(&token.kind, tokens.get(index + 1)) else {
+            continue;
+        };
+        collect_semantic_segments(
+            text,
+            token.span.start,
+            token.span.end,
+            token_type,
+            &mut absolute,
+        );
+    }
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    absolute
+        .into_iter()
+        .map(|(line, start, length, token_type)| {
+            let delta_line = line - previous_line;
+            let delta_start = if delta_line == 0 {
+                start - previous_start
+            } else {
+                start
+            };
+            previous_line = line;
+            previous_start = start;
+            SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type,
+                token_modifiers_bitset: 0,
+            }
+        })
+        .collect()
+}
+
+fn semantic_token_type(
+    kind: &kalcite_syntax::TokenKind,
+    next: Option<&kalcite_syntax::Token>,
+) -> Option<u32> {
+    use kalcite_syntax::TokenKind;
+    match kind {
+        TokenKind::Class
+        | TokenKind::Struct
+        | TokenKind::Fn
+        | TokenKind::Var
+        | TokenKind::Const
+        | TokenKind::Signal
+        | TokenKind::Use
+        | TokenKind::Module
+        | TokenKind::Public
+        | TokenKind::Private
+        | TokenKind::Protected
+        | TokenKind::Extend
+        | TokenKind::Extends
+        | TokenKind::Return
+        | TokenKind::If
+        | TokenKind::Else
+        | TokenKind::While
+        | TokenKind::For
+        | TokenKind::In => Some(SEMANTIC_KEYWORD),
+        TokenKind::Number(_) => Some(SEMANTIC_NUMBER),
+        TokenKind::String(_) | TokenKind::NativeBlock { .. } => Some(SEMANTIC_STRING),
+        TokenKind::Ident(name) => {
+            if name
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_uppercase())
+            {
+                Some(SEMANTIC_TYPE)
+            } else if matches!(next.map(|token| &token.kind), Some(TokenKind::LParen)) {
+                Some(SEMANTIC_FUNCTION)
+            } else {
+                Some(SEMANTIC_VARIABLE)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn collect_semantic_segments(
+    text: &str,
+    start: usize,
+    end: usize,
+    token_type: u32,
+    out: &mut Vec<(u32, u32, u32, u32)>,
+) {
+    let mut cursor = start.min(text.len());
+    let end = end.min(text.len()).max(cursor);
+    while cursor < end {
+        let segment_end = text[cursor..end]
+            .find('\n')
+            .map(|offset| cursor + offset)
+            .unwrap_or(end);
+        if segment_end > cursor {
+            let start_position = byte_position(text, cursor);
+            let end_position = byte_position(text, segment_end);
+            out.push((
+                start_position.line,
+                start_position.character,
+                end_position.character - start_position.character,
+                token_type,
+            ));
+        }
+        cursor = segment_end.saturating_add(1);
+    }
 }
 
 fn byte_position(text: &str, offset: usize) -> Position {
@@ -947,7 +1108,7 @@ fn byte_position(text: &str, offset: usize) -> Position {
         .rsplit('\n')
         .next()
         .unwrap_or_default()
-        .chars()
+        .encode_utf16()
         .count() as u32;
     Position::new(line, character)
 }
@@ -985,6 +1146,36 @@ mod tests {
         assert_eq!(diagnostics_for("kmap", "Jump=NoSuchKey").len(), 1);
         assert_eq!(diagnostics_for("kschema", "version=1").len(), 1);
         assert_eq!(diagnostics_for("kscn", "[node").len(), 1);
+    }
+
+    #[test]
+    fn semantic_tokens_follow_the_lexer_and_utf16_positions() {
+        let tokens = semantic_tokens("public class Player { fn update() { var count = 12; } }");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_KEYWORD)
+        );
+        assert!(tokens.iter().any(|token| token.token_type == SEMANTIC_TYPE));
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_FUNCTION)
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_VARIABLE)
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_NUMBER)
+        );
+
+        let text = "😀player";
+        assert_eq!(byte_position(text, 4), Position::new(0, 2));
+        assert_eq!(position_offset(text, Position::new(0, 2)), 4);
     }
 
     #[test]
