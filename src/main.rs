@@ -76,7 +76,13 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions::default()),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -198,6 +204,85 @@ impl LanguageServer for Backend {
             &text,
             &params.text_document.uri,
         ))))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri;
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, position);
+        let Some(root) = self.project_root(&uri).await else {
+            return Ok(None);
+        };
+        Ok(Some(symbol_locations(&root, &word)))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let Some(text) = self.document_text(&params.text_document.uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, params.position);
+        if !valid_identifier(&word) {
+            return Ok(None);
+        }
+        let start = position_offset(&text, params.position);
+        Ok(Some(PrepareRenameResponse::Range(byte_range(
+            &text,
+            start.saturating_sub(word.len()),
+            start.saturating_sub(word.len()) + word.len(),
+        ))))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        if !valid_identifier(&params.new_name) {
+            return Ok(None);
+        }
+        let uri = params.text_document_position.text_document.uri;
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, params.text_document_position.position);
+        let Some(root) = self.project_root(&uri).await else {
+            return Ok(None);
+        };
+        let mut changes = HashMap::new();
+        for (uri, ranges) in symbol_ranges(&root, &word) {
+            changes.insert(
+                uri,
+                ranges
+                    .into_iter()
+                    .map(|range| TextEdit {
+                        range,
+                        new_text: params.new_name.clone(),
+                    })
+                    .collect(),
+            );
+        }
+        Ok((!changes.is_empty()).then_some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let Some(root) = self.root.read().await.clone() else {
+            return Ok(None);
+        };
+        let query = params.query.to_ascii_lowercase();
+        let mut symbols = project_symbols(&root)
+            .into_iter()
+            .filter(|symbol| symbol.name.to_ascii_lowercase().contains(&query))
+            .collect::<Vec<_>>();
+        symbols.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(Some(symbols))
     }
 }
 
@@ -737,6 +822,95 @@ fn declaration_symbol_kind(tokens: &[kalcite_syntax::Token], index: usize) -> Op
     }
 }
 
+fn project_script_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(manifest) = kalcite_project::load_manifest(root) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    collect_files(&root.join(&manifest.scripts_dir), &mut files);
+    collect_files(&root.join(".kally/packages"), &mut files);
+    files.retain(|path| path.extension().and_then(|extension| extension.to_str()) == Some("klc"));
+    files.sort();
+    files
+}
+
+fn symbol_ranges(root: &Path, word: &str) -> HashMap<Url, Vec<Range>> {
+    if !valid_identifier(word) {
+        return HashMap::new();
+    }
+    let mut matches = HashMap::new();
+    for path in project_script_files(root) {
+        let (Ok(uri), Ok(text)) = (Url::from_file_path(&path), fs::read_to_string(&path)) else {
+            continue;
+        };
+        let ranges = kalcite_syntax::lex(&text)
+            .into_iter()
+            .flatten()
+            .filter_map(|token| match token.kind {
+                kalcite_syntax::TokenKind::Ident(name) if name == word => {
+                    Some(byte_range(&text, token.span.start, token.span.end))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !ranges.is_empty() {
+            matches.insert(uri, ranges);
+        }
+    }
+    matches
+}
+
+fn symbol_locations(root: &Path, word: &str) -> Vec<Location> {
+    symbol_ranges(root, word)
+        .into_iter()
+        .flat_map(|(uri, ranges)| {
+            ranges
+                .into_iter()
+                .map(move |range| Location::new(uri.clone(), range))
+        })
+        .collect()
+}
+
+fn project_symbols(root: &Path) -> Vec<SymbolInformation> {
+    project_script_files(root)
+        .into_iter()
+        .filter_map(|path| {
+            let uri = Url::from_file_path(&path).ok()?;
+            let text = fs::read_to_string(path).ok()?;
+            Some(document_symbols(&text, &uri))
+        })
+        .flatten()
+        .collect()
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+        && !matches!(
+            value,
+            "class"
+                | "struct"
+                | "fn"
+                | "var"
+                | "const"
+                | "signal"
+                | "use"
+                | "return"
+                | "if"
+                | "else"
+                | "while"
+                | "for"
+                | "in"
+                | "public"
+                | "private"
+                | "protected"
+        )
+}
+
 fn word_at(text: &str, position: Position) -> String {
     let offset = position_offset(text, position).min(text.len());
     let bytes = text.as_bytes();
@@ -843,6 +1017,34 @@ mod tests {
         assert!(kalcite_project::builtin_node("RayTracer3D").is_some());
         assert!(kalcite_project::builtin_node("TileMap").is_some());
         assert!(kalcite_project::builtin_node("VBoxContainer").is_some());
+    }
+
+    #[test]
+    fn project_symbol_ranges_only_match_identifier_tokens() {
+        let root = std::env::temp_dir().join(format!("kalcite-lsp-symbols-{}", std::process::id()));
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("kalcite.toml"),
+            kalcite_project::ProjectManifest::default().encode(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("scripts/main.klc"),
+            "class Player { fn update() { Player(); } } // PlayerPlayer\n",
+        )
+        .unwrap();
+
+        let ranges = symbol_ranges(&root, "Player");
+        assert_eq!(ranges.values().map(Vec::len).sum::<usize>(), 2);
+        assert!(
+            project_symbols(&root)
+                .iter()
+                .any(|symbol| symbol.name == "Player")
+        );
+        assert!(valid_identifier("Player_2"));
+        assert!(!valid_identifier("Player.name"));
+        assert!(!valid_identifier("class"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
