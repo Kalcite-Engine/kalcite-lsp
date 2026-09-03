@@ -16,8 +16,8 @@ cargo test
 cargo clippy --all-targets
 ```
 
-Add a regression test in `src/main.rs` whenever a diagnostic, completion, or
-symbol-navigation behavior changes.
+Add a regression test in `src/main.rs` whenever a diagnostic, completion,
+symbol-navigation, UTF-16 position, or semantic-token behavior changes.
 
 ## Updating the core dependency
 

@@ -53,6 +53,13 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
     ("Draw.glow", "void — draw an energy-attenuated radial light"),
 ];
 
+const SEMANTIC_KEYWORD: u32 = 0;
+const SEMANTIC_TYPE: u32 = 1;
+const SEMANTIC_FUNCTION: u32 = 2;
+const SEMANTIC_VARIABLE: u32 = 3;
+const SEMANTIC_NUMBER: u32 = 4;
+const SEMANTIC_STRING: u32 = 5;
+
 struct Backend {
     client: Client,
     root: RwLock<Option<PathBuf>>,
@@ -76,7 +83,32 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions::default()),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
+                semantic_tokens_provider: Some(
+                    SemanticTokensOptions {
+                        legend: SemanticTokensLegend {
+                            token_types: vec![
+                                SemanticTokenType::KEYWORD,
+                                SemanticTokenType::TYPE,
+                                SemanticTokenType::FUNCTION,
+                                SemanticTokenType::VARIABLE,
+                                SemanticTokenType::NUMBER,
+                                SemanticTokenType::STRING,
+                            ],
+                            token_modifiers: Vec::new(),
+                        },
+                        range: None,
+                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -198,6 +230,98 @@ impl LanguageServer for Backend {
             &text,
             &params.text_document.uri,
         ))))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let Some(text) = self.document_text(&params.text_document.uri).await else {
+            return Ok(None);
+        };
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic_tokens(&text),
+        })))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri;
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, position);
+        let Some(root) = self.project_root(&uri).await else {
+            return Ok(None);
+        };
+        Ok(Some(symbol_locations(&root, &word)))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let Some(text) = self.document_text(&params.text_document.uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, params.position);
+        if !valid_identifier(&word) {
+            return Ok(None);
+        }
+        let start = position_offset(&text, params.position);
+        Ok(Some(PrepareRenameResponse::Range(byte_range(
+            &text,
+            start.saturating_sub(word.len()),
+            start.saturating_sub(word.len()) + word.len(),
+        ))))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        if !valid_identifier(&params.new_name) {
+            return Ok(None);
+        }
+        let uri = params.text_document_position.text_document.uri;
+        let Some(text) = self.document_text(&uri).await else {
+            return Ok(None);
+        };
+        let word = word_at(&text, params.text_document_position.position);
+        let Some(root) = self.project_root(&uri).await else {
+            return Ok(None);
+        };
+        let mut changes = HashMap::new();
+        for (uri, ranges) in symbol_ranges(&root, &word) {
+            changes.insert(
+                uri,
+                ranges
+                    .into_iter()
+                    .map(|range| TextEdit {
+                        range,
+                        new_text: params.new_name.clone(),
+                    })
+                    .collect(),
+            );
+        }
+        Ok((!changes.is_empty()).then_some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let Some(root) = self.root.read().await.clone() else {
+            return Ok(None);
+        };
+        let query = params.query.to_ascii_lowercase();
+        let mut symbols = project_symbols(&root)
+            .into_iter()
+            .filter(|symbol| symbol.name.to_ascii_lowercase().contains(&query))
+            .collect::<Vec<_>>();
+        symbols.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(Some(symbols))
     }
 }
 
@@ -737,6 +861,95 @@ fn declaration_symbol_kind(tokens: &[kalcite_syntax::Token], index: usize) -> Op
     }
 }
 
+fn project_script_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(manifest) = kalcite_project::load_manifest(root) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    collect_files(&root.join(&manifest.scripts_dir), &mut files);
+    collect_files(&root.join(".kally/packages"), &mut files);
+    files.retain(|path| path.extension().and_then(|extension| extension.to_str()) == Some("klc"));
+    files.sort();
+    files
+}
+
+fn symbol_ranges(root: &Path, word: &str) -> HashMap<Url, Vec<Range>> {
+    if !valid_identifier(word) {
+        return HashMap::new();
+    }
+    let mut matches = HashMap::new();
+    for path in project_script_files(root) {
+        let (Ok(uri), Ok(text)) = (Url::from_file_path(&path), fs::read_to_string(&path)) else {
+            continue;
+        };
+        let ranges = kalcite_syntax::lex(&text)
+            .into_iter()
+            .flatten()
+            .filter_map(|token| match token.kind {
+                kalcite_syntax::TokenKind::Ident(name) if name == word => {
+                    Some(byte_range(&text, token.span.start, token.span.end))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !ranges.is_empty() {
+            matches.insert(uri, ranges);
+        }
+    }
+    matches
+}
+
+fn symbol_locations(root: &Path, word: &str) -> Vec<Location> {
+    symbol_ranges(root, word)
+        .into_iter()
+        .flat_map(|(uri, ranges)| {
+            ranges
+                .into_iter()
+                .map(move |range| Location::new(uri.clone(), range))
+        })
+        .collect()
+}
+
+fn project_symbols(root: &Path) -> Vec<SymbolInformation> {
+    project_script_files(root)
+        .into_iter()
+        .filter_map(|path| {
+            let uri = Url::from_file_path(&path).ok()?;
+            let text = fs::read_to_string(path).ok()?;
+            Some(document_symbols(&text, &uri))
+        })
+        .flatten()
+        .collect()
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+        && !matches!(
+            value,
+            "class"
+                | "struct"
+                | "fn"
+                | "var"
+                | "const"
+                | "signal"
+                | "use"
+                | "return"
+                | "if"
+                | "else"
+                | "while"
+                | "for"
+                | "in"
+                | "public"
+                | "private"
+                | "protected"
+        )
+}
+
 fn word_at(text: &str, position: Position) -> String {
     let offset = position_offset(text, position).min(text.len());
     let bytes = text.as_bytes();
@@ -759,11 +972,133 @@ fn position_offset(text: &str, position: Position) -> usize {
     let mut offset = 0usize;
     for (line, part) in text.split_inclusive('\n').enumerate() {
         if line == position.line as usize {
-            return offset + (position.character as usize).min(part.trim_end_matches('\n').len());
+            let content = part.trim_end_matches('\n');
+            let mut utf16 = 0u32;
+            for (index, character) in content.char_indices() {
+                let width = character.len_utf16() as u32;
+                if utf16 + width > position.character {
+                    return offset + index;
+                }
+                utf16 += width;
+            }
+            return offset + content.len();
         }
         offset += part.len();
     }
     text.len()
+}
+
+fn semantic_tokens(text: &str) -> Vec<SemanticToken> {
+    let Ok(tokens) = kalcite_syntax::lex(text) else {
+        return Vec::new();
+    };
+    let mut absolute = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(token_type) = semantic_token_type(&token.kind, tokens.get(index + 1)) else {
+            continue;
+        };
+        collect_semantic_segments(
+            text,
+            token.span.start,
+            token.span.end,
+            token_type,
+            &mut absolute,
+        );
+    }
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    absolute
+        .into_iter()
+        .map(|(line, start, length, token_type)| {
+            let delta_line = line - previous_line;
+            let delta_start = if delta_line == 0 {
+                start - previous_start
+            } else {
+                start
+            };
+            previous_line = line;
+            previous_start = start;
+            SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type,
+                token_modifiers_bitset: 0,
+            }
+        })
+        .collect()
+}
+
+fn semantic_token_type(
+    kind: &kalcite_syntax::TokenKind,
+    next: Option<&kalcite_syntax::Token>,
+) -> Option<u32> {
+    use kalcite_syntax::TokenKind;
+    match kind {
+        TokenKind::Class
+        | TokenKind::Struct
+        | TokenKind::Fn
+        | TokenKind::Var
+        | TokenKind::Const
+        | TokenKind::Signal
+        | TokenKind::Use
+        | TokenKind::Module
+        | TokenKind::Public
+        | TokenKind::Private
+        | TokenKind::Protected
+        | TokenKind::Extend
+        | TokenKind::Extends
+        | TokenKind::Return
+        | TokenKind::If
+        | TokenKind::Else
+        | TokenKind::While
+        | TokenKind::For
+        | TokenKind::In => Some(SEMANTIC_KEYWORD),
+        TokenKind::Number(_) => Some(SEMANTIC_NUMBER),
+        TokenKind::String(_) | TokenKind::NativeBlock { .. } => Some(SEMANTIC_STRING),
+        TokenKind::Ident(name) => {
+            if name
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_uppercase())
+            {
+                Some(SEMANTIC_TYPE)
+            } else if matches!(next.map(|token| &token.kind), Some(TokenKind::LParen)) {
+                Some(SEMANTIC_FUNCTION)
+            } else {
+                Some(SEMANTIC_VARIABLE)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn collect_semantic_segments(
+    text: &str,
+    start: usize,
+    end: usize,
+    token_type: u32,
+    out: &mut Vec<(u32, u32, u32, u32)>,
+) {
+    let mut cursor = start.min(text.len());
+    let end = end.min(text.len()).max(cursor);
+    while cursor < end {
+        let segment_end = text[cursor..end]
+            .find('\n')
+            .map(|offset| cursor + offset)
+            .unwrap_or(end);
+        if segment_end > cursor {
+            let start_position = byte_position(text, cursor);
+            let end_position = byte_position(text, segment_end);
+            out.push((
+                start_position.line,
+                start_position.character,
+                end_position.character - start_position.character,
+                token_type,
+            ));
+        }
+        cursor = segment_end.saturating_add(1);
+    }
 }
 
 fn byte_position(text: &str, offset: usize) -> Position {
@@ -773,7 +1108,7 @@ fn byte_position(text: &str, offset: usize) -> Position {
         .rsplit('\n')
         .next()
         .unwrap_or_default()
-        .chars()
+        .encode_utf16()
         .count() as u32;
     Position::new(line, character)
 }
@@ -814,6 +1149,36 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_follow_the_lexer_and_utf16_positions() {
+        let tokens = semantic_tokens("public class Player { fn update() { var count = 12; } }");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_KEYWORD)
+        );
+        assert!(tokens.iter().any(|token| token.token_type == SEMANTIC_TYPE));
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_FUNCTION)
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_VARIABLE)
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_NUMBER)
+        );
+
+        let text = "😀player";
+        assert_eq!(byte_position(text, 4), Position::new(0, 2));
+        assert_eq!(position_offset(text, Position::new(0, 2)), 4);
+    }
+
+    #[test]
     fn locates_words_and_definitions() {
         let text = "public class Player extend Node { private i16 speed = 2; public void Update() {} }\nInput.action_held(\"Left\");";
         assert_eq!(word_at(text, Position::new(1, 10)), "Input.action_held");
@@ -843,6 +1208,34 @@ mod tests {
         assert!(kalcite_project::builtin_node("RayTracer3D").is_some());
         assert!(kalcite_project::builtin_node("TileMap").is_some());
         assert!(kalcite_project::builtin_node("VBoxContainer").is_some());
+    }
+
+    #[test]
+    fn project_symbol_ranges_only_match_identifier_tokens() {
+        let root = std::env::temp_dir().join(format!("kalcite-lsp-symbols-{}", std::process::id()));
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("kalcite.toml"),
+            kalcite_project::ProjectManifest::default().encode(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("scripts/main.klc"),
+            "class Player { fn update() { Player(); } } // PlayerPlayer\n",
+        )
+        .unwrap();
+
+        let ranges = symbol_ranges(&root, "Player");
+        assert_eq!(ranges.values().map(Vec::len).sum::<usize>(), 2);
+        assert!(
+            project_symbols(&root)
+                .iter()
+                .any(|symbol| symbol.name == "Player")
+        );
+        assert!(valid_identifier("Player_2"));
+        assert!(!valid_identifier("Player.name"));
+        assert!(!valid_identifier("class"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
