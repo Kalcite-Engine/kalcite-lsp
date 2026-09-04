@@ -10,10 +10,10 @@ repository = "https://github.com/Kalcite-Engine/kalcite-lsp"
 [dependencies]
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
-kalcite-compiler = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-syntax = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-project = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-scene = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-assets = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-input = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
-kalcite-save = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "43de6f23c9cf388bf8a1764e93445dd8c51d54cf" }
+kalcite-compiler = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-syntax = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-project = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-scene = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-assets = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-input = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
+kalcite-save = { git = "https://github.com/Kalcite-Engine/kalcite.git", rev = "bde785f03b2eebb6e6af0221a10f850285565053" }
