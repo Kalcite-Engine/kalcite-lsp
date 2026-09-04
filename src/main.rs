@@ -1049,6 +1049,7 @@ fn semantic_token_type(
         | TokenKind::Extend
         | TokenKind::Extends
         | TokenKind::Return
+        | TokenKind::Defer
         | TokenKind::If
         | TokenKind::Else
         | TokenKind::While
@@ -1176,6 +1177,17 @@ mod tests {
         let text = "😀player";
         assert_eq!(byte_position(text, 4), Position::new(0, 2));
         assert_eq!(position_offset(text, Position::new(0, 2)), 4);
+    }
+
+    #[test]
+    fn semantic_tokens_mark_defer_as_a_keyword() {
+        let tokens = semantic_tokens("fn save() { defer close(); }");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_KEYWORD && token.length == 5),
+            "defer must be highlighted as a keyword rather than an identifier"
+        );
     }
 
     #[test]
