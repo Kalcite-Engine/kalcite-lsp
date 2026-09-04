@@ -65,6 +65,11 @@ const LANGUAGE_COMPLETIONS: &[(&str, &str, &str)] = &[
         "return ${0};",
     ),
     (
+        "break",
+        "keyword — leave the innermost while loop after its local cleanup",
+        "break;",
+    ),
+    (
         "if",
         "keyword — conditional branch",
         "if (${1:condition}) {\n    ${0}\n}",
@@ -987,6 +992,7 @@ fn valid_identifier(value: &str) -> bool {
                 | "signal"
                 | "use"
                 | "return"
+                | "break"
                 | "if"
                 | "else"
                 | "while"
@@ -1097,6 +1103,7 @@ fn semantic_token_type(
         | TokenKind::Extend
         | TokenKind::Extends
         | TokenKind::Return
+        | TokenKind::Break
         | TokenKind::Defer
         | TokenKind::If
         | TokenKind::Else
@@ -1239,6 +1246,17 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_mark_break_as_a_keyword() {
+        let tokens = semantic_tokens("fn update() { while true { break; } }");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_KEYWORD && token.length == 5),
+            "break must be highlighted as a keyword rather than an identifier"
+        );
+    }
+
+    #[test]
     fn locates_words_and_definitions() {
         let text = "public class Player extend Node { private i16 speed = 2; public void Update() {} }\nInput.action_held(\"Left\");";
         assert_eq!(word_at(text, Position::new(1, 10)), "Input.action_held");
@@ -1282,6 +1300,27 @@ mod tests {
             defer.insert_text.as_deref(),
             Some("defer ${1:cleanup}(${0});")
         );
+    }
+
+    #[test]
+    fn language_completions_include_a_break_snippet() {
+        let break_item = language_completions()
+            .into_iter()
+            .find(|item| item.label == "break")
+            .expect("break completion");
+        assert_eq!(break_item.kind, Some(CompletionItemKind::KEYWORD));
+        assert_eq!(
+            break_item.insert_text_format,
+            Some(InsertTextFormat::SNIPPET)
+        );
+        assert_eq!(break_item.insert_text.as_deref(), Some("break;"));
+    }
+
+    #[test]
+    fn language_hover_explains_break_loop_scope() {
+        let detail = language_detail("break").expect("break hover detail");
+        assert!(detail.contains("innermost while loop"));
+        assert!(detail.contains("cleanup"));
     }
 
     #[test]

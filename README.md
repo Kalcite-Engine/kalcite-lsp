@@ -12,7 +12,7 @@ project resources.
 - completion for language and engine symbols;
 - hover documentation for known engine APIs;
 - go-to-definition, references, rename, document symbols, and workspace symbols;
-- lexer-backed semantic tokens for keywords (including `defer`), types, functions, variables,
+- lexer-backed semantic tokens for keywords (including `defer` and `break`), types, functions, variables,
   numbers, and strings, with UTF-16 LSP positions for non-ASCII documents.
 
 The server communicates over standard input/output using LSP. It is intended to
