@@ -70,6 +70,11 @@ const LANGUAGE_COMPLETIONS: &[(&str, &str, &str)] = &[
         "break;",
     ),
     (
+        "continue",
+        "keyword — finish the current while iteration after its local cleanup",
+        "continue;",
+    ),
+    (
         "if",
         "keyword — conditional branch",
         "if (${1:condition}) {\n    ${0}\n}",
@@ -993,6 +998,7 @@ fn valid_identifier(value: &str) -> bool {
                 | "use"
                 | "return"
                 | "break"
+                | "continue"
                 | "if"
                 | "else"
                 | "while"
@@ -1104,6 +1110,7 @@ fn semantic_token_type(
         | TokenKind::Extends
         | TokenKind::Return
         | TokenKind::Break
+        | TokenKind::Continue
         | TokenKind::Defer
         | TokenKind::If
         | TokenKind::Else
@@ -1257,6 +1264,17 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_mark_continue_as_a_keyword() {
+        let tokens = semantic_tokens("fn update() { while true { continue; } }");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.token_type == SEMANTIC_KEYWORD && token.length == 8),
+            "continue must be highlighted as a keyword rather than an identifier"
+        );
+    }
+
+    #[test]
     fn locates_words_and_definitions() {
         let text = "public class Player extend Node { private i16 speed = 2; public void Update() {} }\nInput.action_held(\"Left\");";
         assert_eq!(word_at(text, Position::new(1, 10)), "Input.action_held");
@@ -1314,6 +1332,27 @@ mod tests {
             Some(InsertTextFormat::SNIPPET)
         );
         assert_eq!(break_item.insert_text.as_deref(), Some("break;"));
+    }
+
+    #[test]
+    fn language_completions_include_a_continue_snippet() {
+        let continue_item = language_completions()
+            .into_iter()
+            .find(|item| item.label == "continue")
+            .expect("continue completion");
+        assert_eq!(continue_item.kind, Some(CompletionItemKind::KEYWORD));
+        assert_eq!(
+            continue_item.insert_text_format,
+            Some(InsertTextFormat::SNIPPET)
+        );
+        assert_eq!(continue_item.insert_text.as_deref(), Some("continue;"));
+    }
+
+    #[test]
+    fn language_hover_explains_continue_iteration_scope() {
+        let detail = language_detail("continue").expect("continue hover detail");
+        assert!(detail.contains("current while iteration"));
+        assert!(detail.contains("cleanup"));
     }
 
     #[test]
