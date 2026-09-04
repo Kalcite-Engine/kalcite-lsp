@@ -192,9 +192,11 @@ impl LanguageServer for Backend {
         };
         let word = word_at(&text, position);
         let root = self.project_root(&text_document.uri).await;
-        let detail = engine_detail(&word)
-            .map(str::to_string)
-            .or_else(|| project_detail(root.as_deref(), &word));
+        let detail = language_detail(&word).map(str::to_string).or_else(|| {
+            engine_detail(&word)
+                .map(str::to_string)
+                .or_else(|| project_detail(root.as_deref(), &word))
+        });
         Ok(detail.map(|detail| Hover {
             contents: HoverContents::Scalar(MarkedString::String(detail)),
             range: None,
@@ -758,6 +760,12 @@ fn language_completions() -> Vec<CompletionItem> {
         .collect()
 }
 
+fn language_detail(word: &str) -> Option<&'static str> {
+    LANGUAGE_COMPLETIONS
+        .iter()
+        .find_map(|(keyword, detail, _)| (*keyword == word).then_some(*detail))
+}
+
 fn engine_detail(word: &str) -> Option<&'static str> {
     ENGINE_SYMBOLS.iter().find_map(|(symbol, detail)| {
         (word == *symbol || symbol.rsplit('.').next() == Some(word)).then_some(*detail)
@@ -1274,6 +1282,13 @@ mod tests {
             defer.insert_text.as_deref(),
             Some("defer ${1:cleanup}(${0});")
         );
+    }
+
+    #[test]
+    fn language_hover_explains_deterministic_defer_cleanup() {
+        let detail = language_detail("defer").expect("defer hover detail");
+        assert!(detail.contains("LIFO"));
+        assert!(detail.contains("scope"));
     }
 
     #[test]
