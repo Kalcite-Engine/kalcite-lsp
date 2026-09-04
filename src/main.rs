@@ -53,6 +53,29 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
     ("Draw.glow", "void — draw an energy-attenuated radial light"),
 ];
 
+const LANGUAGE_COMPLETIONS: &[(&str, &str, &str)] = &[
+    (
+        "defer",
+        "keyword — run cleanup in LIFO order when the current scope ends",
+        "defer ${1:cleanup}(${0});",
+    ),
+    (
+        "return",
+        "keyword — leave the current function",
+        "return ${0};",
+    ),
+    (
+        "if",
+        "keyword — conditional branch",
+        "if (${1:condition}) {\n    ${0}\n}",
+    ),
+    (
+        "while",
+        "keyword — conditional loop",
+        "while (${1:condition}) {\n    ${0}\n}",
+    ),
+];
+
 const SEMANTIC_KEYWORD: u32 = 0;
 const SEMANTIC_TYPE: u32 = 1;
 const SEMANTIC_FUNCTION: u32 = 2;
@@ -181,15 +204,18 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let root = self.project_root(&uri).await;
-        let mut items = ENGINE_SYMBOLS
-            .iter()
-            .map(|(label, detail)| CompletionItem {
-                label: (*label).into(),
-                kind: Some(CompletionItemKind::METHOD),
-                detail: Some((*detail).into()),
-                ..Default::default()
-            })
-            .collect::<Vec<_>>();
+        let mut items = language_completions();
+        items.extend(
+            ENGINE_SYMBOLS
+                .iter()
+                .map(|(label, detail)| CompletionItem {
+                    label: (*label).into(),
+                    kind: Some(CompletionItemKind::METHOD),
+                    detail: Some((*detail).into()),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        );
         if let Some(root) = root {
             items.extend(project_completions(&root));
         }
@@ -718,6 +744,20 @@ fn completion(label: &str, kind: CompletionItemKind, detail: &str) -> Completion
     }
 }
 
+fn language_completions() -> Vec<CompletionItem> {
+    LANGUAGE_COMPLETIONS
+        .iter()
+        .map(|(label, detail, insert_text)| CompletionItem {
+            label: (*label).into(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            detail: Some((*detail).into()),
+            insert_text: Some((*insert_text).into()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            ..Default::default()
+        })
+        .collect()
+}
+
 fn engine_detail(word: &str) -> Option<&'static str> {
     ENGINE_SYMBOLS.iter().find_map(|(symbol, detail)| {
         (word == *symbol || symbol.rsplit('.').next() == Some(word)).then_some(*detail)
@@ -1220,6 +1260,20 @@ mod tests {
         assert!(kalcite_project::builtin_node("RayTracer3D").is_some());
         assert!(kalcite_project::builtin_node("TileMap").is_some());
         assert!(kalcite_project::builtin_node("VBoxContainer").is_some());
+    }
+
+    #[test]
+    fn language_completions_include_a_defer_snippet() {
+        let defer = language_completions()
+            .into_iter()
+            .find(|item| item.label == "defer")
+            .expect("defer completion");
+        assert_eq!(defer.kind, Some(CompletionItemKind::KEYWORD));
+        assert_eq!(defer.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        assert_eq!(
+            defer.insert_text.as_deref(),
+            Some("defer ${1:cleanup}(${0});")
+        );
     }
 
     #[test]
