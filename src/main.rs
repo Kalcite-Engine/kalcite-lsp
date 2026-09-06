@@ -23,6 +23,10 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
         "Text.equals",
         "bool — allocation-free bounded-text comparison; its second operand may be a string literal",
     ),
+    (
+        "Text.starts_with",
+        "bool — allocation-free bounded prefix comparison; its prefix may be a string literal",
+    ),
     ("Input.action_held", "bool — named action is currently held"),
     (
         "Input.action_pressed",
@@ -1338,6 +1342,7 @@ mod tests {
         assert!(labels.contains("Draw.line"));
         assert!(labels.contains("Draw.glow"));
         assert!(labels.contains("Text.equals"));
+        assert!(labels.contains("Text.starts_with"));
         assert!(kalcite_project::builtin_node("CollisionShape2D").is_some());
         assert!(kalcite_project::builtin_node("Fluid2D").is_some());
         assert!(kalcite_project::builtin_node("RayLight2D").is_some());
@@ -1427,6 +1432,13 @@ mod tests {
         let detail = engine_detail("equals").expect("Text.equals hover detail");
         assert!(detail.contains("allocation-free"));
         assert!(detail.contains("string literal"));
+    }
+
+    #[test]
+    fn engine_hover_explains_text_literal_prefixes() {
+        let detail = engine_detail("starts_with").expect("Text.starts_with hover detail");
+        assert!(detail.contains("allocation-free"));
+        assert!(detail.contains("prefix"));
     }
 
     #[test]
