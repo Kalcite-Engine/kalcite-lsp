@@ -7,6 +7,22 @@ use tokio::sync::RwLock;
 use tower_lsp::{Client, LanguageServer, LspService, Server, jsonrpc::Result, lsp_types::*};
 
 const ENGINE_SYMBOLS: &[(&str, &str)] = &[
+    (
+        "Text.length",
+        "u32 — allocation-free byte length of a bounded String[N]",
+    ),
+    (
+        "Text.byte_at",
+        "u8 — byte at an index, or 0 when the index is outside the used text",
+    ),
+    (
+        "Text.byte_at_u32",
+        "u32 — byte at an index widened to u32, or 0 when outside the used text",
+    ),
+    (
+        "Text.equals",
+        "bool — allocation-free bounded-text comparison; its second operand may be a string literal",
+    ),
     ("Input.action_held", "bool — named action is currently held"),
     (
         "Input.action_pressed",
@@ -1321,6 +1337,7 @@ mod tests {
         assert!(labels.contains("Draw.sprite_frame"));
         assert!(labels.contains("Draw.line"));
         assert!(labels.contains("Draw.glow"));
+        assert!(labels.contains("Text.equals"));
         assert!(kalcite_project::builtin_node("CollisionShape2D").is_some());
         assert!(kalcite_project::builtin_node("Fluid2D").is_some());
         assert!(kalcite_project::builtin_node("RayLight2D").is_some());
@@ -1403,6 +1420,13 @@ mod tests {
         let detail = language_detail("defer").expect("defer hover detail");
         assert!(detail.contains("LIFO"));
         assert!(detail.contains("scope"));
+    }
+
+    #[test]
+    fn engine_hover_explains_text_literal_equality() {
+        let detail = engine_detail("equals").expect("Text.equals hover detail");
+        assert!(detail.contains("allocation-free"));
+        assert!(detail.contains("string literal"));
     }
 
     #[test]
