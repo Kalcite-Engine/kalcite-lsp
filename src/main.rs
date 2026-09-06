@@ -66,12 +66,12 @@ const LANGUAGE_COMPLETIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "break",
-        "keyword — leave the innermost while loop after its local cleanup",
+        "keyword — leave the innermost loop after its local cleanup",
         "break;",
     ),
     (
         "continue",
-        "keyword — finish the current while iteration after its local cleanup",
+        "keyword — finish the current loop iteration after its local cleanup",
         "continue;",
     ),
     (
@@ -83,6 +83,11 @@ const LANGUAGE_COMPLETIONS: &[(&str, &str, &str)] = &[
         "while",
         "keyword — conditional loop",
         "while (${1:condition}) {\n    ${0}\n}",
+    ),
+    (
+        "for",
+        "keyword — iterate values from a fixed-size array",
+        "for ${1:item} in ${2:items} {\n    ${0}\n}",
     ),
 ];
 
@@ -1275,6 +1280,24 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_mark_for_and_in_as_keywords() {
+        let tokens = semantic_tokens(
+            "fn sum([i16; 2] values) -> i16 { for value in values { return value; } return 0; }",
+        );
+        assert!(
+            tokens
+                .iter()
+                .filter(|token| token.token_type == SEMANTIC_KEYWORD)
+                .any(|token| token.length == 3)
+                && tokens
+                    .iter()
+                    .filter(|token| token.token_type == SEMANTIC_KEYWORD)
+                    .any(|token| token.length == 2),
+            "for and in must be highlighted as keywords"
+        );
+    }
+
+    #[test]
     fn locates_words_and_definitions() {
         let text = "public class Player extend Node { private i16 speed = 2; public void Update() {} }\nInput.action_held(\"Left\");";
         assert_eq!(word_at(text, Position::new(1, 10)), "Input.action_held");
@@ -1349,16 +1372,29 @@ mod tests {
     }
 
     #[test]
+    fn language_completions_include_a_fixed_array_for_snippet() {
+        let for_item = language_completions()
+            .into_iter()
+            .find(|item| item.label == "for")
+            .expect("for completion");
+        assert_eq!(for_item.kind, Some(CompletionItemKind::KEYWORD));
+        assert_eq!(
+            for_item.insert_text.as_deref(),
+            Some("for ${1:item} in ${2:items} {\n    ${0}\n}")
+        );
+    }
+
+    #[test]
     fn language_hover_explains_continue_iteration_scope() {
         let detail = language_detail("continue").expect("continue hover detail");
-        assert!(detail.contains("current while iteration"));
+        assert!(detail.contains("current loop iteration"));
         assert!(detail.contains("cleanup"));
     }
 
     #[test]
     fn language_hover_explains_break_loop_scope() {
         let detail = language_detail("break").expect("break hover detail");
-        assert!(detail.contains("innermost while loop"));
+        assert!(detail.contains("innermost loop"));
         assert!(detail.contains("cleanup"));
     }
 
