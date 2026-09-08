@@ -14,6 +14,7 @@ project resources.
 - go-to-definition, references, rename, document symbols, and workspace symbols;
 - lexer-backed semantic tokens for keywords (including `defer`, `break`, and `continue`), types, functions, variables,
   numbers, and strings, with UTF-16 LSP positions for non-ASCII documents.
+- incremental document synchronization with strict UTF-16 range validation, avoiding full-document transfers on normal edits.
 
 The server communicates over standard input/output using LSP. It is intended to
 be launched by an editor or client extension rather than used interactively.

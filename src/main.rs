@@ -136,7 +136,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions::default()),
@@ -197,14 +197,17 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        if let Some(change) = params.content_changes.into_iter().last() {
-            let uri = params.text_document.uri;
-            self.documents
-                .write()
-                .await
-                .insert(uri.clone(), change.text.clone());
-            self.validate(uri, change.text).await;
-        }
+        let uri = params.text_document.uri;
+        let text = {
+            let mut documents = self.documents.write().await;
+            let current = documents.get(&uri).cloned().unwrap_or_default();
+            let Some(text) = apply_content_changes(current, &params.content_changes) else {
+                return;
+            };
+            documents.insert(uri.clone(), text.clone());
+            text
+        };
+        self.validate(uri, text).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -1053,6 +1056,57 @@ fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
 }
 
+/// Apply LSP content changes in order. Incremental ranges use UTF-16 code
+/// units, so an edit around non-ASCII text cannot be applied as a byte range.
+fn apply_content_changes(
+    mut text: String,
+    changes: &[TextDocumentContentChangeEvent],
+) -> Option<String> {
+    for change in changes {
+        if let Some(range) = change.range {
+            let start = strict_position_offset(&text, range.start)?;
+            let end = strict_position_offset(&text, range.end)?;
+            if start > end {
+                return None;
+            }
+            text.replace_range(start..end, &change.text);
+        } else {
+            text = change.text.clone();
+        }
+    }
+    Some(text)
+}
+
+/// Convert a well-formed LSP position to a byte boundary. Unlike lookup
+/// helpers, incremental edits reject out-of-document positions and a cursor
+/// placed in the middle of a UTF-16 surrogate pair.
+fn strict_position_offset(text: &str, position: Position) -> Option<usize> {
+    let mut offset = 0usize;
+    for (line, part) in text.split_inclusive('\n').enumerate() {
+        if line != position.line as usize {
+            offset += part.len();
+            continue;
+        }
+        let content = part.trim_end_matches('\n');
+        let mut utf16 = 0u32;
+        for (index, character) in content.char_indices() {
+            if utf16 == position.character {
+                return Some(offset + index);
+            }
+            utf16 += character.len_utf16() as u32;
+            if utf16 > position.character {
+                return None;
+            }
+        }
+        return (utf16 == position.character).then_some(offset + content.len());
+    }
+    if position.line == text.lines().count() as u32 && position.character == 0 {
+        Some(text.len())
+    } else {
+        None
+    }
+}
+
 fn position_offset(text: &str, position: Position) -> usize {
     let mut offset = 0usize;
     for (line, part) in text.split_inclusive('\n').enumerate() {
@@ -1264,6 +1318,36 @@ mod tests {
         let text = "😀player";
         assert_eq!(byte_position(text, 4), Position::new(0, 2));
         assert_eq!(position_offset(text, Position::new(0, 2)), 4);
+    }
+
+    #[test]
+    fn incremental_changes_follow_utf16_ranges_and_preserve_other_text() {
+        let changes = [
+            TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 2), Position::new(0, 7))),
+                range_length: None,
+                text: "é".into(),
+            },
+            TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(1, 0), Position::new(1, 0))),
+                range_length: None,
+                text: "// ".into(),
+            },
+        ];
+        assert_eq!(
+            apply_content_changes("😀hello\nworld".into(), &changes),
+            Some("😀é\n// world".into())
+        );
+    }
+
+    #[test]
+    fn incremental_changes_reject_half_surrogate_positions() {
+        let change = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 1), Position::new(0, 1))),
+            range_length: None,
+            text: "x".into(),
+        };
+        assert_eq!(apply_content_changes("😀".into(), &[change]), None);
     }
 
     #[test]
