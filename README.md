@@ -9,8 +9,8 @@ project resources.
 
 - lexical and project-aware diagnostics for `.klc` files;
 - scene and resource diagnostics for `.kscn`, input maps, assets, and saves;
-- completion for language and engine symbols, including allocation-free `Text` APIs;
-- hover documentation for known engine APIs and bounded-text literal equality;
+- completion for language and engine symbols, including allocation-free `Text` APIs such as `Text.contains`;
+- hover documentation for known engine APIs and bounded-text literal comparisons, prefixes, and containment;
 - go-to-definition, references, rename, document symbols, and workspace symbols;
 - lexer-backed semantic tokens for keywords (including `defer`, `break`, and `continue`), types, functions, variables,
   numbers, and strings, with UTF-16 LSP positions for non-ASCII documents.
