@@ -28,6 +28,10 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
         "bool — allocation-free bounded prefix comparison; its prefix may be a string literal",
     ),
     (
+        "Text.ends_with",
+        "bool — allocation-free bounded suffix comparison; its suffix may be a string literal",
+    ),
+    (
         "Text.contains",
         "bool — allocation-free bounded substring search; its needle may be a string literal",
     ),
@@ -1431,6 +1435,7 @@ mod tests {
         assert!(labels.contains("Draw.glow"));
         assert!(labels.contains("Text.equals"));
         assert!(labels.contains("Text.starts_with"));
+        assert!(labels.contains("Text.ends_with"));
         assert!(labels.contains("Text.contains"));
         assert!(kalcite_project::builtin_node("CollisionShape2D").is_some());
         assert!(kalcite_project::builtin_node("Fluid2D").is_some());
@@ -1528,6 +1533,13 @@ mod tests {
         let detail = engine_detail("starts_with").expect("Text.starts_with hover detail");
         assert!(detail.contains("allocation-free"));
         assert!(detail.contains("prefix"));
+    }
+
+    #[test]
+    fn engine_hover_explains_text_literal_suffixes() {
+        let detail = engine_detail("ends_with").expect("Text.ends_with hover detail");
+        assert!(detail.contains("allocation-free"));
+        assert!(detail.contains("suffix"));
     }
 
     #[test]
