@@ -39,6 +39,10 @@ const ENGINE_SYMBOLS: &[(&str, &str)] = &[
         "Text.index_of",
         "i32 — first allocation-free bounded substring index, or -1; its needle may be a string literal",
     ),
+    (
+        "Text.last_index_of",
+        "i32 — final allocation-free bounded substring index, or -1; an empty needle is found at the used-byte boundary",
+    ),
     ("Input.action_held", "bool — named action is currently held"),
     (
         "Input.action_pressed",
@@ -1442,6 +1446,7 @@ mod tests {
         assert!(labels.contains("Text.ends_with"));
         assert!(labels.contains("Text.contains"));
         assert!(labels.contains("Text.index_of"));
+        assert!(labels.contains("Text.last_index_of"));
         assert!(kalcite_project::builtin_node("CollisionShape2D").is_some());
         assert!(kalcite_project::builtin_node("Fluid2D").is_some());
         assert!(kalcite_project::builtin_node("RayLight2D").is_some());
@@ -1559,6 +1564,13 @@ mod tests {
         let detail = engine_detail("index_of").expect("Text.index_of hover detail");
         assert!(detail.contains("allocation-free"));
         assert!(detail.contains("-1"));
+    }
+
+    #[test]
+    fn engine_hover_explains_text_reverse_index_lookup() {
+        let detail = engine_detail("last_index_of").expect("Text.last_index_of hover detail");
+        assert!(detail.contains("allocation-free"));
+        assert!(detail.contains("used-byte boundary"));
     }
 
     #[test]
